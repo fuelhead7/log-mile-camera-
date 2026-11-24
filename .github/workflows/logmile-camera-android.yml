@@ -1,0 +1,42 @@
+name: LogMile Camera Android
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+      - run: npx expo prebuild --platform android --no-install
+      - name: Check camera permission survives manifest generation
+        run: |
+          grep -F 'android:name="android.permission.CAMERA"' android/app/src/main/AndroidManifest.xml |
+            grep -v 'tools:node="remove"'
+      - run: ./gradlew :app:assembleRelease
+        working-directory: android
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LogMile-Camera-test-APK
+          path: android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
