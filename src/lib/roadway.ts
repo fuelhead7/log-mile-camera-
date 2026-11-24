@@ -69,7 +69,11 @@ export async function lookupRoad(fix: Fix): Promise<Lookup> {
     const response = await fetch(`${roadwayLayer}/query?${query}`, { signal: controller.signal });
     if (!response.ok) throw Error('Request failed');
     const data = await response.json();
-    if (data.hasM !== true || !Array.isArray(data.features) || data.error || data.exceededTransferLimit) throw Error('Incomplete route data');
+    if (!data || !Array.isArray(data.features) || data.error || data.exceededTransferLimit) throw Error('Incomplete route data');
+    // ArcGIS omits hasM on successful queries with no nearby features.
+    // Keep empty coverage separate from service failures, but require measures
+    // before calculating a log mile from any returned geometry.
+    if (data.features.length > 0 && data.hasM !== true) throw Error('Missing route measures');
     return matchRoad(fix, data.features);
   } catch {
     return { kind: 'review', message: 'TDOT lookup unavailable. Enter the location manually.' };
