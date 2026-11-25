@@ -31,6 +31,11 @@ function Panel({ title, children }: { title?: string; children: ReactNode }) {
 function coordinates(fix: Fix | null) {
   return fix ? `${fix.latitude.toFixed(5)}°, ${fix.longitude.toFixed(5)}°` : 'GPS unavailable';
 }
+function gpsAccuracy(fix: Fix | null) {
+  const accuracy = fix?.accuracy;
+  if (accuracy == null || !Number.isFinite(accuracy) || accuracy < 0) return 'GPS accuracy unavailable';
+  return `GPS: ±${Math.round(accuracy)} m · ${accuracy <= 35 ? 'Good' : 'Low accuracy'}`;
+}
 function applyMatch(tag: PhotoTag, match: Match): PhotoTag {
   return { ...tag, route: match.route, mile: match.mile.toFixed(2), county: match.county, estimate: match, source: 'tdot' };
 }
@@ -99,20 +104,20 @@ export default function CameraWorkflow() {
         update({ fix: null, message: 'Enable GPS to look up log miles' });
         return;
       }
-      if (request === gpsRequest.current) setGps(previous => ({ ...previous, message: 'Acquiring GPS…' }));
-      const result = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      if (request === gpsRequest.current) setGps(previous => ({ fix: previous.fix, message: 'Acquiring GPS…' }));
+      const result = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Highest });
       const fix = { ...result.coords, timestamp: result.timestamp };
-      update({ fix, message: 'Looking up TDOT route…' });
+      update({ fix, message: fix.accuracy != null && fix.accuracy >= 0 && fix.accuracy <= 35 ? 'Looking up TDOT route…' : 'TDOT lookup skipped: low GPS accuracy.' });
       const lookup = await lookupRoad(fix);
       update({ fix, lookup, message: lookup.kind === 'matched' ? 'Review TDOT estimate before saving' : lookup.message });
     } catch {
-      update({ fix: null, message: 'GPS unavailable. You can enter a location manually.' });
+      if (request === gpsRequest.current) setGps(previous => ({ fix: previous.fix, message: 'GPS refresh failed. Enter location manually or retry.' }));
     }
   }, []);
   useEffect(() => {
     if (screen !== 'camera' || !active || simulated) return;
     void locate();
-    const timer = setInterval(() => { void locate(); }, 20_000);
+    const timer = setInterval(() => { void locate(); }, 10_000);
     return () => { clearInterval(timer); gpsRequest.current++; };
   }, [screen, active, simulated, locate]);
 
@@ -151,7 +156,7 @@ export default function CameraWorkflow() {
   }
 
   function edit(values: Partial<PhotoTag>, manual = false) {
-    setDraft(previous => previous && ({ ...previous, tag: { ...previous.tag, ...values, ...(manual ? { source: 'manual' } : {}) } }));
+    setDraft(previous => previous && ({ ...previous, tag: { ...previous.tag, ...values, ...(manual ? { source: 'manual', estimate: null } : {}) } }));
   }
 
   async function submit(share: boolean) {
@@ -204,11 +209,14 @@ export default function CameraWorkflow() {
             <Text style={styles.accent}>{simulated ? 'SIMULATED · TRAINING ONLY' : 'COUNTY LOG MILE'}</Text>
             <Text style={styles.title}>{match ? match.mile.toFixed(2) : 'Awaiting location'}</Text>
             {match && <Text style={styles.body}>{match.route} · {match.county}</Text>}
-            <Text style={styles.secondary}>{simulated ? 'Sample location. Saving is disabled.' : gps.message}</Text>
+            <Text style={styles.secondary}>{gpsAccuracy(simulated ? demoFix : gps.fix)}</Text>
+            <Text style={styles.secondary}>{simulated ? 'Sample location. Saving is disabled.' : `TDOT: ${gps.message}`}</Text>
+            {!simulated && gps.fix && <Text style={styles.secondary}>Last fix: {new Date(gps.fix.timestamp).toLocaleTimeString()}</Text>}
           </View>
         </View>
         <View style={styles.wrap}>
-          <Button label={simulated ? 'Return to live GPS' : gps.fix ? coordinates(gps.fix) : 'Enable / refresh GPS'} onPress={() => simulated ? setSimulated(false) : void locate(true)} />
+          <Button label={simulated ? 'Return to live GPS' : 'Refresh GPS'} onPress={() => simulated ? setSimulated(false) : void locate(true)} />
+          {!simulated && gps.fix && <Text style={styles.secondary}>{coordinates(gps.fix)}</Text>}
           {!simulated && <Button label="Simulate GPS" onPress={() => setSimulated(true)} />}
         </View>
         {!permission?.granted && <View style={styles.middle}>
@@ -250,6 +258,7 @@ export default function CameraWorkflow() {
           </View>
         </View>
         {draft.imported && <Text style={styles.secondary}>Imported photo. Enter its original location manually.</Text>}
+        {!draft.imported && !draft.simulated && !tag.mile && <Panel title="Manual location"><Text style={styles.body}>Automatic log mile unavailable. Enter the route, county and log mile below. GPS coordinates are retained when a recent fix is available.</Text></Panel>}
         {draft.lookup?.kind === 'review' && <Panel title="Verify location">
           <Text style={styles.body}>{draft.lookup.message}</Text>
           {draft.lookup.candidates?.map(candidate => <Button key={candidate.routeId}
